@@ -58,7 +58,7 @@ def assign(
 
         if username and gist_id and access_token:
             push_tool = push.PushToGist(token=access_token)
-            url = push_tool.raw_url(config={"username": username, "gistid": gist_id, "filename": filename})
+            url = push_tool.raw_url(push_conf={"username": username, "gistid": gist_id, "filename": filename})
 
             content = utils.http_get(url=url, timeout=30)
             items = re.findall(pattern, content, flags=re.M)
@@ -89,13 +89,12 @@ def assign(
             if not line or line.startswith("#"):
                 continue
 
-            words = line.rsplit(delimiter, maxsplit=3)
+            words = line.rsplit(delimiter, maxsplit=2)
             address = utils.trim(words[0])
             coupon = utils.trim(words[1]) if len(words) > 1 else ""
             invite_code = utils.trim(words[2]) if len(words) > 2 else ""
-            api_prefix = utils.trim(words[3]) if len(words) > 3 else ""
 
-            records[address] = {"coupon": coupon, "invite_code": invite_code, "api_prefix": api_prefix}
+            records[address] = {"coupon": coupon, "invite_code": invite_code}
 
         return records
 
@@ -154,7 +153,7 @@ def assign(
         if candidates:
             for k, v in candidates.items():
                 item = domains.get(k, {})
-                item.update(v)
+                item["coupon"] = v
 
                 domains[k] = item
 
@@ -186,7 +185,6 @@ def assign(
                 domain=domain,
                 coupon=param.get("coupon", ""),
                 invite_code=param.get("invite_code", ""),
-                api_prefix=param.get("api_prefix", ""),
                 bin_name=bin_name,
                 rigid=rigid,
                 chuck=chuck,
@@ -256,27 +254,29 @@ def aggregate(args: argparse.Namespace) -> None:
         nodes = clash.filter_proxies(proxies).get("proxies", [])
     else:
         binpath = os.path.join(workspace, clash_bin)
-        confif_file = "config.yaml"
-        proxies = clash.generate_config(workspace, list(proxies), confif_file)
+        filename = "config.yaml"
+        proxies = clash.generate_config(workspace, list(proxies), filename)
 
         # 可执行权限
         utils.chmod(binpath)
 
-        logger.info(f"startup clash now, workspace: {workspace}, config: {confif_file}")
+        logger.info(f"startup clash now, workspace: {workspace}, config: {filename}")
         process = subprocess.Popen(
             [
                 binpath,
                 "-d",
                 workspace,
                 "-f",
-                os.path.join(workspace, confif_file),
+                os.path.join(workspace, filename),
             ]
         )
         logger.info(f"clash start success, begin check proxies, num: {len(proxies)}")
 
         time.sleep(random.randint(3, 6))
         params = [
-            [p, clash.EXTERNAL_CONTROLLER, 5000, args.url, args.delay, False] for p in proxies if isinstance(p, dict)
+            [p, clash.EXTERNAL_CONTROLLER, args.timeout, args.url, args.delay, False]
+            for p in proxies
+            if isinstance(p, dict)
         ]
 
         masks = utils.multi_thread_run(
@@ -309,7 +309,6 @@ def aggregate(args: argparse.Namespace) -> None:
 
     data = {"proxies": nodes}
     urls = list(subscriptions)
-    source = "proxies.yaml"
 
     # 如果文件夹不存在则创建
     os.makedirs(DATA_BASE, exist_ok=True)
@@ -326,7 +325,6 @@ def aggregate(args: argparse.Namespace) -> None:
         os.remove(supplier)
 
     with open(supplier, "w+", encoding="utf8") as f:
-        yaml.add_representer(clash.QuotedStr, clash.quoted_scalar)
         yaml.dump(data, f, allow_unicode=True)
 
     if os.path.exists(generate_conf) and os.path.isfile(generate_conf):
@@ -339,7 +337,7 @@ def aggregate(args: argparse.Namespace) -> None:
         targets.append(("convert_mixed", mixed_file, "mixed", False, args.vitiate))
 
     for t in targets:
-        success = subconverter.generate_conf(generate_conf, t[0], source, t[1], t[2], True, t[3], t[4])
+        success = subconverter.generate_conf(generate_conf, t[0], source, t[1], t[2], t[3], t[4])
         if not success:
             logger.error(f"cannot generate subconverter config file for target: {t[2]}")
             continue
@@ -390,7 +388,7 @@ def aggregate(args: argparse.Namespace) -> None:
 
     # 如有必要，上传至 Gist
     if gist_id and access_token:
-        files, config = {}, {"gistid": gist_id, "filename": list(records.keys())[0]}
+        files, push_conf = {}, {"gistid": gist_id, "filename": list(records.keys())[0]}
 
         for k, v in records.items():
             if os.path.exists(v) and os.path.isfile(v):
@@ -404,7 +402,7 @@ def aggregate(args: argparse.Namespace) -> None:
             push_client = push.PushToGist(token=access_token)
 
             # 上传
-            success = push_client.push_to(content="", config=config, payload={"files": files}, group="collect")
+            success = push_client.push_to(content="", push_conf=push_conf, payload={"files": files}, group="collect")
             if success:
                 logger.info(f"upload proxies and subscriptions to gist successed")
             else:
@@ -414,28 +412,8 @@ def aggregate(args: argparse.Namespace) -> None:
     workflow.cleanup(workspace, [])
 
 
-class CustomHelpFormatter(argparse.HelpFormatter):
-    def _format_action_invocation(self, action):
-        if action.choices:
-            parts = []
-            if action.option_strings:
-                parts.extend(action.option_strings)
-
-                # 移除使用帮助信息中 -t 或 --targets 附带的过长的可选项信息
-                if action.nargs != 0 and action.option_strings != ["-t", "--targets"]:
-                    default = action.dest.upper()
-                    args_string = self._format_args(action, default)
-                    parts[-1] += " " + args_string
-            else:
-                args_string = self._format_args(action, action.dest)
-                parts.append(args_string)
-            return ", ".join(parts)
-        else:
-            return super()._format_action_invocation(action)
-
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(formatter_class=CustomHelpFormatter)
+    parser = argparse.ArgumentParser()
     parser.add_argument(
         "-a",
         "--all",
@@ -443,6 +421,15 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="generate full configuration for clash",
+    )
+
+    parser.add_argument(
+        "-b",
+        "--both",
+        dest="both",
+        action="store_true",
+        default=False,
+        help="save results in both clash and mixed formats, only clash is saved by default",
     )
 
     parser.add_argument(
@@ -518,6 +505,15 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "-m",
+        "--mixed",
+        dest="mixed",
+        action="store_true",
+        default=False,
+        help="convert and save as mixed format",
+    )
+
+    parser.add_argument(
         "-n",
         "--num",
         type=int,
@@ -564,11 +560,11 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "-t",
-        "--targets",
-        nargs="+",
-        choices=subconverter.CONVERT_TARGETS,
-        default=["clash", "v2ray", "singbox"],
-        help=f"choose one or more generated profile type. default to clash, v2ray and singbox. supported: {subconverter.CONVERT_TARGETS}",
+        "--timeout",
+        type=int,
+        required=False,
+        default=5000,
+        help="timeout",
     )
 
     parser.add_argument(
@@ -583,9 +579,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "-v",
         "--vitiate",
-        dest="vitiate",
-        action="store_true",
-        default=False,
+        type=int,
+        required=False,
+        default=0,
         help="ignoring default proxies filter rules",
     )
 
