@@ -314,6 +314,13 @@ def aggregate(args: argparse.Namespace) -> None:
     # 如果文件夹不存在则创建
     os.makedirs(DATA_BASE, exist_ok=True)
 
+    # 保存为 mixed 格式
+    to_mixed = args.both or args.mixed
+
+    # 保存为 clash 格式
+    to_clash = args.both or not args.mixed
+
+    source, clash_file, mixed_file = "proxies.yaml", "clash.yaml", "v2ray.txt"
     supplier = os.path.join(PATH, "subconverter", source)
     if os.path.exists(supplier) and os.path.isfile(supplier):
         os.remove(supplier)
@@ -326,13 +333,10 @@ def aggregate(args: argparse.Namespace) -> None:
         os.remove(generate_conf)
 
     targets, records = [], {}
-    for target in args.targets:
-        target = utils.trim(target).lower()
-        convert_name = f'convert_{target.replace("&", "_").replace("=", "_")}'
-
-        filename = subconverter.get_filename(target=target)
-        list_only = False if target == "v2ray" or target == "mixed" or "ss" in target else not args.all
-        targets.append((convert_name, filename, target, list_only, args.vitiate))
+    if to_clash:
+        targets.append(("convert_clash", clash_file, "clash", not args.all, args.vitiate))
+    if to_mixed:
+        targets.append(("convert_mixed", mixed_file, "mixed", False, args.vitiate))
 
     for t in targets:
         success = subconverter.generate_conf(generate_conf, t[0], source, t[1], t[2], True, t[3], t[4])
